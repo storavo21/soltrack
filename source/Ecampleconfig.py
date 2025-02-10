@@ -1,0 +1,5 @@
+MONGODB_URI = 'mongodb+srv://storavo21:<ymcYhzTujUEJK79z>@soltracker.ll2yx.mongodb.net/?retryWrites=true&w=majority&appName=SolTracker'
+BOT_TOKEN = '7992854912:AAHopoG69JNyckFLOXLAiRa-7uhIxRdklJw'
+HELIUS_KEY = 'e47f6ef0-bf77-42b0-bd8e-958b0408c3e9'
+HELIUS_WEBHOOK_URL = ''
+HELIUS_WEBHOOK_ID = 'd90f08c2-2d3c-4bd2-abf9-49d031adcc0b'
