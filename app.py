@@ -8,7 +8,7 @@ from PIL import Image
 from io import BytesIO
 
 import re
-import source.config as config
+from source import config  # Absolute import
 import logging
 from datetime import datetime
 import requests
