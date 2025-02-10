@@ -1,24 +1,24 @@
 from flask import Flask, request
-
-# Telegram Bot was created using ChatGPT, so it uses an older library (python-telegram-bot==13.7)
 from telegram import Bot
 from telegram.utils.request import Request
-
 from PIL import Image
 from io import BytesIO
-
 import re
-from source import config  # Absolute import
+import os  # Use environment variables
 import logging
 from datetime import datetime
 import requests
-
 from pymongo import MongoClient
 
-MONGODB_URI = config.MONGODB_URI
-BOT_TOKEN = config.BOT_TOKEN
-HELIUS_KEY = config.HELIUS_KEY
+# Load environment variables
+MONGODB_URI = os.getenv("MONGODB_URI")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+HELIUS_KEY = os.getenv("HELIUS_KEY")
 
+# Initialize Flask app
+app = Flask(__name__)
+
+# MongoDB setup
 client = MongoClient(MONGODB_URI)
 db = client.sol_wallets
 wallets_collection = db.wallets
@@ -31,18 +31,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Telegram bot functions
 def send_message_to_user(bot_token, user_id, message):
-    # Use telegram library to send text message
+    """Send a text message to a user using the Telegram bot."""
     request = Request(con_pool_size=8)
     bot = Bot(bot_token, request=request)
     bot.send_message(
         chat_id=user_id,
         text=message,
         parse_mode="Markdown",
-        disable_web_page_preview=True)
+        disable_web_page_preview=True
+    )
 
 def send_image_to_user(bot_token, user_id, message, image_url):
-    # Use telegram library to send image with text
+    """Send an image with a caption to a user using the Telegram bot."""
     request = Request(con_pool_size=8)
     bot = Bot(bot_token, request=request)
     image_bytes = get_image(image_url)
@@ -50,15 +52,15 @@ def send_image_to_user(bot_token, user_id, message, image_url):
         chat_id=user_id,
         photo=image_bytes,
         caption=message,
-        parse_mode="Markdown")
-    
+        parse_mode="Markdown"
+    )
+
 def get_image(url):
+    """Download and process an image from a URL."""
     response = requests.get(url).content
-    # Open the downloaded image using Pillow
     image = Image.open(BytesIO(response))
     image = image.convert('RGB')
-    # Resize the image while maintaining its aspect ratio
-    max_size = (800, 800)  # You can adjust the max_size to your desired dimensions
+    max_size = (800, 800)  # Resize the image
     image.thumbnail(max_size, Image.ANTIALIAS)
     image_bytes = BytesIO()
     image.save(image_bytes, 'JPEG', quality=85)
@@ -66,20 +68,18 @@ def get_image(url):
     return image_bytes
 
 def format_wallet_address(match_obj):
-    # Do basic formatting to show addresses in this way: XXXX...XXXX
+    """Format a wallet address for display."""
     wallet_address = match_obj.group(0)
     return wallet_address[:4] + "..." + wallet_address[-4:]
 
 def get_compressed_image(asset_id):
-    # Use RPC to get infor for compressed NFTs
+    """Get metadata for a compressed NFT."""
     url = f'https://rpc.helius.xyz/?api-key={HELIUS_KEY}'
     r_data = {
         "jsonrpc": "2.0",
         "id": "my-id",
         "method": "getAsset",
-        "params": [
-            asset_id
-        ]
+        "params": [asset_id]
     }
     r = requests.post(url, json=r_data)
     url_meta = r.json()['result']['content']['json_uri']
@@ -87,14 +87,13 @@ def get_compressed_image(asset_id):
     return r.json()['image']
 
 def check_image(data):
-    # show nft image
+    """Check if an image exists for the transaction."""
     token_mint = ''
     for token in data[0]['tokenTransfers']:
         if 'NonFungible' in token['tokenStandard']:
             token_mint = token['mint']
     # NFTs and pNFTs
     if len(token_mint) > 0:
-        # Get NFT metadata from Helius
         url = f"https://api.helius.xyz/v0/token-metadata?api-key={HELIUS_KEY}"
         nft_addresses = [token_mint]
         r_data = {
@@ -102,49 +101,46 @@ def check_image(data):
             "includeOffChain": True,
             "disableCache": False,
         }
-
         r = requests.post(url=url, json=r_data)
         j = r.json()
         if 'metadata' not in j[0]['offChainMetadata']:
             return ''
         if 'image' not in j[0]['offChainMetadata']['metadata']:
             return ''
-        image = j[0]['offChainMetadata']['metadata']['image']
-        return image
+        return j[0]['offChainMetadata']['metadata']['image']
     else:
-        # check if this is a compressed NFT
+        # Check if this is a compressed NFT
         if 'compressed' in data[0]['events']:
             if 'assetId' in data[0]['events']['compressed'][0]:
                 asset_id = data[0]['events']['compressed'][0]['assetId']
                 try:
-                    image = get_compressed_image(asset_id)
-                    return image
+                    return get_compressed_image(asset_id)
                 except:
                     return ''
         return ''
 
 def create_message(data):
-    # create a simple text message
+    """Create a message for a transaction."""
     tx_type = data[0]['type'].replace("_", " ")
     tx = data[0]['signature']
     source = data[0]['source']
     description = data[0]['description']
 
-    # identify all accounts involved in the tx
+    # Identify all accounts involved in the transaction
     accounts = []
     for inst in data[0]["instructions"]:
         accounts = accounts + inst["accounts"]
-    # add owner accounts for token transfers (e.g., USDC)
+    # Add owner accounts for token transfers (e.g., USDC)
     if len(data[0]['tokenTransfers']) > 0:
         for token in data[0]['tokenTransfers']:
             accounts.append(token['fromUserAccount'])
             accounts.append(token['toUserAccount'])
         accounts = list(set(accounts))
 
-    # check if image exists
+    # Check if an image exists
     image = check_image(data)
     
-    # find all users with these accounts (multiple users can add the same address)
+    # Find all users with these accounts
     found_docs = list(wallets_collection.find(
         {
             "address": {"$in": accounts},
@@ -155,7 +151,7 @@ def create_message(data):
     found_users = set(found_users)
     logging.info(found_users)
     
-    # for each user create a message
+    # Create a message for each user
     messages = []
     for user in found_users:
         if source != "SYSTEM_PROGRAM":
@@ -165,7 +161,7 @@ def create_message(data):
         if len(description) > 0:
             message = message + '\n\n' + data[0]['description']
 
-            user_wallets = [i['address'] for i in found_docs if i['user_id']==user]
+            user_wallets = [i['address'] for i in found_docs if i['user_id'] == user]
             for user_wallet in user_wallets:
                 if user_wallet not in message:
                     continue
@@ -178,18 +174,15 @@ def create_message(data):
         messages.append({'user': user, 'text': formatted_text, 'image': image})
     return messages
 
-# Launch with Flask
-app = Flask(__name__)
-
+# Webhook endpoint
 @app.route('/wallet', methods=['POST'])
 def handle_webhook():
-    # Extract data from incoming request
+    """Handle incoming webhook requests."""
     data = request.json
-    
     messages = create_message(data)
 
     for message in messages:
-        # log message into DB for debugging
+        # Log the message into the database
         db_entry = {
             "user": message['user'],
             "message": message['text'],
@@ -211,5 +204,6 @@ def handle_webhook():
     logging.info('ok event')
     return 'OK'
 
+# Run the Flask app
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5002)
